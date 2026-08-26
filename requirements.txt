@@ -1,8 +1,8 @@
-fastapi 
-uvicorn[standard] 
-httpx 
-supabase 
-google-generativeai 
-python-dotenv 
+fastapi
+uvicorn
+httpx
+google-generativeai
+supabase
+python-dotenv
 apscheduler
-
+duckduckgo-search
