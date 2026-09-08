@@ -34,8 +34,9 @@ REGLAS CRÍTICAS DE FECHAS:
 - Extrae fechas siempre en formato "YYYY-MM-DD HH:MM". Usa el año actual.
 
 REGLAS DE INTENCIÓN:
-1. "add_alarm": alarmas exactas (guarda en "alarm_at").
-2. "add_reminder": recordatorios 30 min antes (guarda en "remind_at").
+REGLAS DE INTENCIÓN:
+1. "add_alarm": alarmas exactas. Extrae el texto de la alarma (si no logras extraer uno claro, usa por defecto la palabra "Alarma"). Guarda en "alarm_at".
+2. "add_reminder": recordatorios. Guarda en "remind_at" la HORA EXACTA que pidió el usuario. NO RESTES LOS 30 MINUTOS TÚ, el código del sistema lo hará automáticamente.
 3. "add_task": añade tareas. Asigna "materia" ÚNICA Y EXCLUSIVAMENTE si el usuario escribe el nombre de la materia o al menos la primera palabra clave (ej. "Habilidades", "Cinemática", "Sistemas", "Instrumentación", "Análisis", "Modelado"). NO INFIERAS LA MATERIA POR EL CONTEXTO DE LA TAREA. Si no se menciona explícitamente, deja "materia" vacío ("").
    Opciones exactas permitidas:
    - Habilidades Gerenciales
@@ -71,10 +72,18 @@ def process_intent_with_gemini(user_text: str) -> Dict[str, Any]:
 def execute_action(action: Dict[str, Any], user_text: str = "") -> str:
     action_type = action.get("type")
     data = action.get("data", {})
-
+    
     if action_type == "add_alarm":
-        supabase.table("alarms").insert({"text": data.get("text", "Alarma"), "alarm_at": data.get("alarm_at", "")}).execute()
-        return f"🚨 *Alarma configurada:* {data.get('text')} para las {data.get('alarm_at')}"
+        alarm_text = data.get("text")
+        # Filtro de seguridad por si Gemini envía nulos
+        if not alarm_text or str(alarm_text).lower() == "none":
+            alarm_text = "Alarma"
+            
+        supabase.table("alarms").insert({
+            "text": alarm_text, 
+            "alarm_at": data.get("alarm_at", "")
+        }).execute()
+        return f"🚨 *Alarma configurada:* {alarm_text} para las {data.get('alarm_at')}"
     elif action_type == "save_note":
         supabase.table("notes").insert({"content": data.get("content", ""), "category": data.get("category", "general")}).execute()
     elif action_type == "search_notes":
