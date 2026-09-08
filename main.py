@@ -7,7 +7,6 @@ import google.generativeai as genai
 import httpx
 from supabase import Client, create_client
 from datetime import datetime
-from duckduckgo_search import DDGS  # NUEVA LIBRERÍA DE BÚSQUEDA
 
 load_dotenv()
 
@@ -18,7 +17,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-3.5-flash-lite")
+gemini_model = genai.GenerativeModel("gemini-2.5-flash-lite")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI(title="Asistente Personal IA")
@@ -28,7 +27,6 @@ async def send_telegram_message(chat_id: int | str, text: str):
     async with httpx.AsyncClient() as client:
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
         await client.post(f"{TELEGRAM_API_URL}/sendMessage", json=payload)
-
 SYSTEM_PROMPT = """
 Eres el cerebro de un Asistente Personal en Telegram. Tu labor es interpretar el mensaje del usuario y extraer acciones.
 
@@ -36,22 +34,28 @@ REGLAS CRÍTICAS DE FECHAS:
 - Extrae fechas siempre en formato "YYYY-MM-DD HH:MM". Usa el año actual.
 
 REGLAS DE INTENCIÓN:
-1. Si el usuario pide explícitamente una "alarma" (ej. "pon una alarma a las 6:10"), usa el tipo "add_alarm" y guarda la fecha en "alarm_at".
-2. Si pide un "recordatorio" (ej. "recuérdame"), usa "add_reminder" y guarda la fecha en "remind_at".
-3. Si hace una pregunta que requiere buscar en internet (clima actual, noticias, precios, datos recientes), usa "web_search" y escribe la búsqueda en "query".
+1. "add_alarm": alarmas exactas (guarda en "alarm_at").
+2. "add_reminder": recordatorios 30 min antes (guarda en "remind_at").
+3. "add_task": añade tareas. Asigna "materia" ÚNICA Y EXCLUSIVAMENTE si el usuario escribe el nombre de la materia o al menos la primera palabra clave (ej. "Habilidades", "Cinemática", "Sistemas", "Instrumentación", "Análisis", "Modelado"). NO INFIERAS LA MATERIA POR EL CONTEXTO DE LA TAREA. Si no se menciona explícitamente, deja "materia" vacío ("").
+   Opciones exactas permitidas:
+   - Habilidades Gerenciales
+   - Cinemática y Dinámica de Robots
+   - Sistemas Embebidos
+   - Instrumentación Virtual
+   - Análisis de Mecanismos
+   - Modelado y Simulación de Sistemas
 
 Debes responder ÚNICAMENTE con un objeto JSON válido con la siguiente estructura:
 {
   "actions": [
     {
-      "type": "save_note | search_notes | add_task | list_tasks | complete_task | add_reminder | list_reminders | add_alarm | web_search | general_response",
-      "data": { ... }
+      "type": "save_note | search_notes | add_task | list_tasks | complete_task | add_reminder | list_reminders | add_alarm | general_response",
+      "data": { "title": "titulo", "due_date": "YYYY-MM-DD HH:MM", "materia": "Nombre de Materia", "text": "texto", "alarm_at": "YYYY-MM-DD HH:MM" }
     }
   ],
   "reply_message": "Mensaje confirmando la acción en Markdown"
 }
 """
-
 def process_intent_with_gemini(user_text: str) -> Dict[str, Any]:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     prompt = f"{SYSTEM_PROMPT}\n\nFECHA Y HORA ACTUAL (MÉXICO): {now_str}\n\nMensaje del usuario: \"{user_text}\""
@@ -68,37 +72,24 @@ def execute_action(action: Dict[str, Any], user_text: str = "") -> str:
     action_type = action.get("type")
     data = action.get("data", {})
 
-    # NUEVO: BÚSQUEDA WEB
-    if action_type == "web_search":
-        query = data.get("query", "")
-        try:
-            # Buscamos en DuckDuckGo los 3 primeros resultados
-            results = DDGS().text(query, max_results=3)
-            search_text = "\n".join([f"- {r['title']}: {r['body']}" for r in results])
-            
-            # Segunda llamada a Gemini para que lea la web y te responda como humano
-            summary_prompt = f"El usuario preguntó: '{user_text}'. Usando EXCLUSIVAMENTE esta información reciente de internet, respóndele de forma clara y amable:\n{search_text}"
-            summary_response = gemini_model.generate_content(summary_prompt)
-            return summary_response.text
-        except Exception as e:
-            return "🌐 Intenté buscar en internet, pero tuve un problema de conexión temporal."
-
-    # NUEVO: ALARMAS EXACTAS
-    elif action_type == "add_alarm":
+    if action_type == "add_alarm":
         supabase.table("alarms").insert({"text": data.get("text", "Alarma"), "alarm_at": data.get("alarm_at", "")}).execute()
         return f"🚨 *Alarma configurada:* {data.get('text')} para las {data.get('alarm_at')}"
-
-    # LO QUE YA TENÍAMOS
     elif action_type == "save_note":
         supabase.table("notes").insert({"content": data.get("content", ""), "category": data.get("category", "general")}).execute()
     elif action_type == "search_notes":
         res = supabase.table("notes").select("*").ilike("content", f"%{data.get('query', '')}%").execute()
         return f"🔍 *Notas:*\n" + "\n".join([f"• [{n['category']}] {n['content']}" for n in res.data]) if res.data else "🔍 No encontré nada."
     elif action_type == "add_task":
-        supabase.table("tasks").insert({"title": data.get("title", ""), "due_date": data.get("due_date")}).execute()
+        # Ahora insertamos también la materia
+        supabase.table("tasks").insert({
+            "title": data.get("title", ""), 
+            "due_date": data.get("due_date"),
+            "materia": data.get("materia", "")
+        }).execute()
     elif action_type == "list_tasks":
         res = supabase.table("tasks").select("*").eq("is_done", False).order("id").execute()
-        return f"📋 *Tareas pendientes:*\n" + "\n".join([f"• `[ID {t['id']}]` {t['title']} (📅 {t['due_date']})" for t in res.data]) if res.data else "🎉 No tienes tareas."
+        return f"📋 *Tareas pendientes:*\n" + "\n".join([f"• `[ID {t['id']}]` {t['title']} (📅 {t['due_date']})" + (f" *[{t['materia']}]*" if t.get('materia') else "") for t in res.data]) if res.data else "🎉 No tienes tareas."
     elif action_type == "complete_task":
         if "task_id" in data:
             supabase.table("tasks").update({"is_done": True}).eq("id", data["task_id"]).execute()
@@ -126,7 +117,6 @@ async def telegram_webhook(request: Request):
 
         try:
             parsed = process_intent_with_gemini(user_text)
-            # Pasamos 'user_text' para que Gemini sepa qué preguntó el usuario originalmente al buscar en internet
             responses = [execute_action(a, user_text) for a in parsed.get("actions", [])]
             list_results = [r for r in responses if r]
             final_message = "\n\n".join(list_results) if list_results else parsed.get("reply_message", "✅ Listo.")
