@@ -83,7 +83,7 @@ serve(async (req) => {
        await sendTelegram(msg);
 
     } else {
-       // --- REVISIÓN MINUTO A MINUTO (AHORA SÍ FUNCIONA) ---
+       // -reparar xd
        const { data: alarms } = await supabase.from('alarms').select('*').eq('notified', false);
        if (alarms) {
          for (const a of alarms) {

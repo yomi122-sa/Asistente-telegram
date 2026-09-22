@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS exams (
 );
 
 -- 3. Configuración de Cron Jobs
--- NOTA: Reemplazar <SUPABASE_ANON_KEY> y <PROJECT_REF> con tus credenciales
+-- NOTA: Reemplazar <SUPABASE_ANON_KEY> <PROJECT_REF> 
 SELECT cron.schedule(
   'minuto-a-minuto',
   '* * * * *',
